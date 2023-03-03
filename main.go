@@ -35,14 +35,17 @@ type DTO struct {
 func main() {
 	// parse flags
 	flag.StringVar(&ID, "id", "default", "Self ID")
-	flag.StringVar(&NextAddr, "next", "localhost", "Next node address")
+	flag.StringVar(&NextAddr, "n", "localhost", "Next node address")
 	flag.Parse()
 
-	if NextAddr == "" {
+	log.Println("ID:", ID)
+	log.Println("Next node address:", NextAddr)
+
+	if ID == "default" {
 		log.Fatal("Next node address is not set")
 	}
 
-	if ID == "default" {
+	if NextAddr == "" || NextAddr == "localhost" {
 		log.Fatal("Next node address is not set")
 	}
 
