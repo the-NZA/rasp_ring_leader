@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
+	"sort"
 )
 
 /*
@@ -34,11 +34,15 @@ type DTO struct {
 
 func main() {
 	// parse flags
-	flag.StringVar(&ID, "id", "rkkozlov", "Self ID")
-	flag.StringVar(&NextAddr, "next", "", "Next node address")
+	flag.StringVar(&ID, "id", "default", "Self ID")
+	flag.StringVar(&NextAddr, "next", "localhost", "Next node address")
 	flag.Parse()
 
 	if NextAddr == "" {
+		log.Fatal("Next node address is not set")
+	}
+
+	if ID == "default" {
 		log.Fatal("Next node address is not set")
 	}
 
@@ -53,13 +57,13 @@ func main() {
 
 	log.Println("Server started...")
 
-	go handleSpacePress()
+	go handleEnterPress()
 
 	// accept connections
 	for {
 		conn, err := srv.Accept()
 		if err != nil {
-			log.Println(err)
+			log.Println("error:", err)
 			continue
 		}
 
@@ -67,64 +71,23 @@ func main() {
 	}
 }
 
-func handleSpacePress() {
-	// wait for space press
-	// send Who is master?
-	// send self ID
-
-	// wait for response
-	// if response is self ID - set self as leader
-	// if response is not self ID - send Who is master? to next node
-
-	// ---
-
-	// read input from stdin until Space pressed (or Ctrl+C)
-	fmt.Println("Press Space to start choosing Master node")
-
-	s := bufio.NewScanner(os.Stdin)
-	for s.Scan() {
-		if s.Text() != " " {
-			continue
-		}
-
-		// create DTO
-		dto := &DTO{
-			Command: "who",
-			IDs:     []string{ID},
-		}
-
-		// send Who is master? request
-		if err := sendNext(dto); err != nil {
-			log.Println(err)
-			continue
-		}
-
-		return // Exit after first Space press
-	}
-}
-
-func sendNext(dto *DTO) error {
-	// connect to next node
-	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", NextAddr, Port))
+func handleEnterPress() {
+	fmt.Println("Press Enter to start choosing Master node")
+	_, err := fmt.Scanln()
 	if err != nil {
-		return err
-	}
-	defer func(conn net.Conn) {
-		_ = conn.Close()
-	}(conn)
-
-	// send data to next node
-	data, err := json.Marshal(dto)
-	if err != nil {
-		return err
+		log.Fatal(err)
 	}
 
-	_, err = conn.Write(data)
-	if err != nil {
-		return err
+	// create initial DTO
+	dto := &DTO{
+		Command: "who",
+		IDs:     []string{ID},
 	}
 
-	return nil
+	// send Who is master? request
+	if err := sendNext(dto); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func handleConnection(conn net.Conn) {
@@ -157,12 +120,107 @@ func handleConnection(conn net.Conn) {
 func processDTO(dto *DTO) error {
 	switch dto.Command {
 	case "who":
-		// send self ID
+		// sort IDs
+		sort.Slice(dto.IDs, func(i, j int) bool {
+			return dto.IDs[i] < dto.IDs[j]
+		})
+
+		// Find self ID
+		found := false
+		for _, id := range dto.IDs {
+			if id == ID {
+				found = true
+				break
+			}
+		}
+
+		// send self ID to next node if not found
+		if !found {
+			dto.IDs = append(dto.IDs, ID)
+			if err := sendNext(dto); err != nil {
+				return err
+			}
+
+			return nil
+		}
+
+		// Find max ID
+		maxID := dto.IDs[len(dto.IDs)-1]
+
+		// if max ID is self ID, then I am the leader
+		if maxID == ID {
+			LeaderID = ID
+			dto.Command = "leader"
+
+			if err := sendNext(dto); err != nil {
+				return err
+			}
+		}
 
 	case "leader":
+		// sort IDs
+		sort.Slice(dto.IDs, func(i, j int) bool {
+			return dto.IDs[i] < dto.IDs[j]
+		})
+
+		// Find max ID
+		maxID := dto.IDs[len(dto.IDs)-1]
+
+		// if max ID is self ID, then I am the leader
+		if maxID == ID {
+			LeaderID = ID
+			log.Println("Leader is found:", LeaderID)
+
+			if err := sendNext(dto); err != nil {
+				return err
+			}
+
+			return nil
+		}
+
+		// find self ID index
+		var selfIDIndex int
+		for i, id := range dto.IDs {
+			if id == ID {
+				selfIDIndex = i
+				break
+			}
+		}
+
+		// remove self ID from IDs
+		dto.IDs = append(dto.IDs[:selfIDIndex], dto.IDs[selfIDIndex+1:]...)
+
+		// send Leader ID to next node
+		if err := sendNext(dto); err != nil {
+			return err
+		}
 
 	default:
 		return fmt.Errorf("unknown command: %s", dto.Command)
+	}
+
+	return nil
+}
+
+func sendNext(dto *DTO) error {
+	// connect to next node
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", NextAddr, Port))
+	if err != nil {
+		return err
+	}
+	defer func(conn net.Conn) {
+		_ = conn.Close()
+	}(conn)
+
+	// send data to next node
+	data, err := json.Marshal(dto)
+	if err != nil {
+		return err
+	}
+
+	_, err = conn.Write(data)
+	if err != nil {
+		return err
 	}
 
 	return nil
